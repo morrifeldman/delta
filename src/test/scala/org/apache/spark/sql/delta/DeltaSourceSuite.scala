@@ -1333,6 +1333,36 @@ class DeltaSourceSuite extends DeltaSourceSuiteBase with DeltaSQLCommandTest {
     }
   }
 
+  test("startingVersion latest with maxBytesPerTrigger") {
+    withTempDir { dir =>
+      withTempView("startingVersionTest") {
+        val path = dir.getAbsolutePath
+        spark.range(0, 10).write.format("delta").save(path)
+        val q = spark.readStream
+          .format("delta")
+          .option("startingVersion", "latest")
+          .option(DeltaOptions.MAX_BYTES_PER_TRIGGER_OPTION, "1b")
+          .load(path)
+          .writeStream
+          .format("memory")
+          .queryName("startingVersionLatest")
+          .start()
+        try {
+          // Starting from latest shouldn't include any data at first, even the most recent version.
+          q.processAllAvailable()
+          checkAnswer(sql("select * from startingVersionLatest"), Seq.empty)
+
+          // After we add some batches the stream should continue as normal.
+          spark.range(10, 15).write.format("delta").mode("append").save(path)
+          q.processAllAvailable()
+          checkAnswer(sql("select * from startingVersionLatest"), (10 until 15).map(Row(_)))
+        } finally {
+          q.stop()
+        }
+      }
+    }
+  }
+
   test("startingVersion latest defined before started") {
     withTempDir { dir =>
       withTempView("startingVersionTest") {
